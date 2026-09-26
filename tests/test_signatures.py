@@ -607,6 +607,92 @@ def test_an_earlier_401_is_retried_after_a_session_exists(monkeypatch, tmp_path)
     assert session_follow([opened], *paths) == []
 
 
+def test_write_checks_do_not_consume_the_retry_limit(monkeypatch, tmp_path):
+    monkeypatch.setenv("EMERG_LAB_URL", "http://vampi:5000")
+    from emergent_kali.runner_runtime import session_follow
+
+    def fake(method, path, payload=None, headers=None):
+        if method == "POST" and str(path).endswith("login"):
+            password = str((payload or {}).get("password") or "")
+            user = str((payload or {}).get("username") or "")
+            if password == "pw-one" or password.endswith("x"):
+                return 200, '{"auth_token":"token-value-1","message":"Successfully logged in."}'
+            if user == "absent-user":
+                return 200, '{"message":"Username does not exist."}'
+            return 200, '{"message":"Password is not correct for the given username."}'
+        if method == "POST":
+            return 200, '{"message":"Registered"}'
+        if method == "PUT":
+            return 204, ""
+        return 200, '{"user":"name2","secret":"hidden-value"}'
+
+    monkeypatch.setattr("emergent_kali.runner_runtime.lab_exchange", fake)
+    spec = {
+        "url": "http://vampi:5000/openapi.json",
+        "status": 200,
+        "body": json.dumps(
+            {
+                "openapi": "3.0.1",
+                "paths": {
+                    "/users/v1/login": {
+                        "post": {
+                            "requestBody": {
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"properties": {"username": {}, "password": {}}}
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "/users/v1/register": {
+                        "post": {
+                            "requestBody": {
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "properties": {"username": {}, "password": {}, "email": {}}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "/users/v1/{username}/password": {
+                        "put": {
+                            "requestBody": {
+                                "content": {"application/json": {"schema": {"properties": {"password": {}}}}}
+                            }
+                        }
+                    },
+                    "/books/v1/{book_title}": {"get": {"security": [{"bearerAuth": []}]}},
+                },
+            }
+        ),
+    }
+    debug = {
+        "url": "http://vampi:5000/users/v1/_debug",
+        "status": 200,
+        "body": '{"users":[{"username":"name1","password":"pw-one"}]}',
+    }
+    books = {
+        "url": "http://vampi:5000/books/v1",
+        "status": 200,
+        "body": json.dumps(
+            {"Books": [{"book_title": f"bookTitle{index:02d}", "user": "name2"} for index in range(8)]}
+        ),
+    }
+    denied = [
+        {"url": f"http://vampi:5000/books/v1/bookTitle{index:02d}", "status": 401, "body": "{}"}
+        for index in range(8)
+    ]
+    paths = (tmp_path / "spec.json", tmp_path / "session.json", tmp_path / "owners.json")
+    extra = session_follow([spec, debug, books, *denied], *paths)
+    books_read = [item for item in extra if "/books/v1/bookTitle" in str(item.get("url"))]
+    assert len(books_read) == 8
+    assert any((item.get("headers") or {}).get("X-Emerg-Write") == "1" for item in extra)
+
+
 def test_a_public_password_can_read_an_account_page(monkeypatch, tmp_path):
     monkeypatch.setenv("EMERG_LAB_URL", "http://vampi:5000")
     from emergent_kali.runner_runtime import session_follow

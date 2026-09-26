@@ -812,8 +812,9 @@ def session_follow(
     state = _track_statuses(records, origin, denied_path)
     spec_ready = bool(plain or templates)
     attempted = []
+    retries = 0
     for path in state["denied"]:
-        if path in state["opened"] or len(extra) >= 8:
+        if path in state["opened"] or retries >= 8:
             continue
         if path in plain:
             actor = next(iter(sessions), "")
@@ -835,6 +836,7 @@ def session_follow(
                     "body": scrub_lab_body(raw),
                 }
             )
+            retries += 1
             continue
         if not any(_path_matches(template, path) for template in templates):
             if spec_ready:
@@ -865,6 +867,7 @@ def session_follow(
                 "body": scrub_lab_body(raw),
             }
         )
+        retries += 1
     if attempted:
         state["denied"] = [item for item in state["denied"] if item not in attempted]
         try:
