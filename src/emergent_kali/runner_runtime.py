@@ -708,6 +708,32 @@ def _email_change(summary: dict, sessions: dict, origin: str) -> dict | None:
     return None
 
 
+def _track_statuses(records: list[dict], origin: str, path: Path) -> dict:
+    """Remember a 401 until a later session can read it. A 200 closes that path."""
+    saved = _load_json(path)
+    denied = [item for item in saved.get("denied") or [] if isinstance(item, str)]
+    opened = [item for item in saved.get("opened") or [] if isinstance(item, str)]
+    for record in records:
+        url = str(record.get("url") or "")
+        item = url[len(origin) :] if url.startswith(origin) else ""
+        if not item.startswith("/") or "?" in item or ".." in item or "{" in item or len(item) > 80:
+            continue
+        status = record.get("status")
+        if status == 200:
+            if item not in opened:
+                opened.append(item)
+            if item in denied:
+                denied.remove(item)
+        elif status == 401 and item not in denied and item not in opened:
+            denied.append(item)
+    state = {"denied": denied[:40], "opened": opened[:80]}
+    try:
+        path.write_text(json.dumps(state), encoding="utf-8")
+    except OSError:
+        pass
+    return state
+
+
 def session_follow(
     records: list[dict],
     spec_path: Path = _SPEC_PATH,
@@ -782,12 +808,12 @@ def session_follow(
             extra.append(mailed)
     templates = [item for item in summary.get("templates") or [] if isinstance(item, str)]
     plain = [item for item in summary.get("plain") or [] if isinstance(item, str)]
-    for record in records:
-        if record.get("status") != 401 or len(extra) >= 8:
-            continue
-        url = str(record.get("url") or "")
-        path = url[len(origin) :] if url.startswith(origin) else ""
-        if not path:
+    denied_path = session_path.with_name(session_path.stem + "-denied.json")
+    state = _track_statuses(records, origin, denied_path)
+    spec_ready = bool(plain or templates)
+    attempted = []
+    for path in state["denied"]:
+        if path in state["opened"] or len(extra) >= 8:
             continue
         if path in plain:
             actor = next(iter(sessions), "")
@@ -798,6 +824,9 @@ def session_follow(
                 status, raw = lab_exchange("GET", path, headers={"Authorization": "Bearer " + token})
             except (OSError, ValueError, http.client.HTTPException):
                 continue
+            attempted.append(path)
+            if status == 200 and path not in state["opened"]:
+                state["opened"].append(path)
             extra.append(
                 {
                     "url": origin + path,
@@ -808,6 +837,8 @@ def session_follow(
             )
             continue
         if not any(_path_matches(template, path) for template in templates):
+            if spec_ready:
+                attempted.append(path)
             continue
         ident = path.rsplit("/", 1)[-1]
         owner = ""
@@ -823,6 +854,9 @@ def session_follow(
             status, raw = lab_exchange("GET", path, headers={"Authorization": "Bearer " + token})
         except (OSError, ValueError, http.client.HTTPException):
             continue
+        attempted.append(path)
+        if status == 200 and path not in state["opened"]:
+            state["opened"].append(path)
         extra.append(
             {
                 "url": origin + path,
@@ -831,6 +865,12 @@ def session_follow(
                 "body": scrub_lab_body(raw),
             }
         )
+    if attempted:
+        state["denied"] = [item for item in state["denied"] if item not in attempted]
+        try:
+            denied_path.write_text(json.dumps(state), encoding="utf-8")
+        except OSError:
+            pass
     return extra
 
 

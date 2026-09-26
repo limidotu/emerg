@@ -574,6 +574,39 @@ def test_another_account_can_read_a_secret(monkeypatch, tmp_path):
     assert [item["title"] for item in detect(extra[0])] == ["Another account can read this secret"]
 
 
+def test_an_earlier_401_is_retried_after_a_session_exists(monkeypatch, tmp_path):
+    monkeypatch.setenv("EMERG_LAB_URL", "http://vampi:5000")
+    from emergent_kali.runner_runtime import session_follow
+
+    def fake(method, path, payload=None, headers=None):
+        if method == "POST":
+            return 200, '{"auth_token":"token-value-1"}'
+        return 200, '{"username":"name1","email":"name1@mail.com"}'
+
+    monkeypatch.setattr("emergent_kali.runner_runtime.lab_exchange", fake)
+    spec = {
+        "url": "http://vampi:5000/openapi.json",
+        "status": 200,
+        "body": (
+            '{"openapi":"3.0.1","paths":{"/users/v1/login":{"post":{}},'
+            '"/me":{"get":{"security":[{"bearerAuth":[]}]}}}}'
+        ),
+    }
+    denied = {"url": "http://vampi:5000/me", "status": 401, "body": "{}"}
+    debug = {
+        "url": "http://vampi:5000/users/v1/_debug",
+        "status": 200,
+        "body": '{"users":[{"username":"name1","password":"pw-one"}]}',
+    }
+    paths = (tmp_path / "spec.json", tmp_path / "session.json", tmp_path / "owners.json")
+    assert session_follow([spec, denied], *paths) == []
+    extra = session_follow([debug], *paths)
+    assert extra[0]["url"].endswith("/me")
+    assert extra[0]["headers"]["X-Emerg-Actor"] == "name1"
+    opened = {"url": "http://vampi:5000/me", "status": 200, "body": "{}"}
+    assert session_follow([opened], *paths) == []
+
+
 def test_a_public_password_can_read_an_account_page(monkeypatch, tmp_path):
     monkeypatch.setenv("EMERG_LAB_URL", "http://vampi:5000")
     from emergent_kali.runner_runtime import session_follow
