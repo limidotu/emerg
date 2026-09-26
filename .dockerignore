@@ -1,0 +1,9 @@
+*
+!src/
+!src/emergent_kali/
+!src/emergent_kali/runner_runtime.py
+!services/
+!services/kali-runner/
+!services/kali-runner/Dockerfile
+!services/kali-runner/templates/
+!services/kali-runner/templates/*.yaml

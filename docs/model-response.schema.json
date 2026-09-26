@@ -1,0 +1,339 @@
+{
+  "$defs": {
+    "Assignment": {
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "enum": [
+            "reconnaissance",
+            "web-test"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "task": {
+          "maxLength": 1000,
+          "minLength": 3,
+          "title": "Task",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "task"
+      ],
+      "title": "Assignment",
+      "type": "object"
+    },
+    "Citation": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence_id": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Evidence Id",
+          "type": "string"
+        },
+        "quote": {
+          "maxLength": 2000,
+          "minLength": 8,
+          "title": "Quote",
+          "type": "string"
+        }
+      },
+      "required": [
+        "evidence_id",
+        "quote"
+      ],
+      "title": "Citation",
+      "type": "object"
+    },
+    "Finding": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "finding",
+          "title": "Kind",
+          "type": "string"
+        },
+        "decision": {
+          "enum": [
+            "candidate",
+            "confirmed",
+            "rejected"
+          ],
+          "title": "Decision",
+          "type": "string"
+        },
+        "finding": {
+          "$ref": "#/$defs/FindingDraft"
+        },
+        "reason": {
+          "maxLength": 2000,
+          "minLength": 3,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "decision",
+        "finding",
+        "reason"
+      ],
+      "title": "Finding",
+      "type": "object"
+    },
+    "FindingDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "maxLength": 200,
+          "minLength": 3,
+          "title": "Title",
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "info",
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "category": {
+          "maxLength": 100,
+          "minLength": 3,
+          "title": "Category",
+          "type": "string"
+        },
+        "location": {
+          "maxLength": 2048,
+          "minLength": 1,
+          "title": "Location",
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Citation"
+          },
+          "maxItems": 10,
+          "minItems": 1,
+          "title": "Evidence",
+          "type": "array"
+        },
+        "reproduction": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10,
+          "minItems": 1,
+          "title": "Reproduction",
+          "type": "array"
+        },
+        "impact": {
+          "maxLength": 2000,
+          "minLength": 5,
+          "title": "Impact",
+          "type": "string"
+        },
+        "remediation": {
+          "maxLength": 2000,
+          "minLength": 5,
+          "title": "Remediation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "severity",
+        "category",
+        "location",
+        "evidence",
+        "reproduction",
+        "impact",
+        "remediation"
+      ],
+      "title": "FindingDraft",
+      "type": "object"
+    },
+    "Observation": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "observation",
+          "title": "Kind",
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Evidence Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "summary"
+      ],
+      "title": "Observation",
+      "type": "object"
+    },
+    "Plan": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "plan",
+          "title": "Kind",
+          "type": "string"
+        },
+        "tasks": {
+          "items": {
+            "$ref": "#/$defs/Assignment"
+          },
+          "maxItems": 6,
+          "minItems": 1,
+          "title": "Tasks",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "tasks"
+      ],
+      "title": "Plan",
+      "type": "object"
+    },
+    "Stop": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "stop",
+          "title": "Kind",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 2000,
+          "minLength": 3,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "reason"
+      ],
+      "title": "Stop",
+      "type": "object"
+    },
+    "ToolArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "maxLength": 2048,
+          "title": "Url",
+          "type": "string"
+        },
+        "ports": {
+          "items": {
+            "type": "integer"
+          },
+          "maxItems": 1,
+          "minItems": 1,
+          "title": "Ports",
+          "type": "array"
+        },
+        "max_pages": {
+          "default": 5,
+          "maximum": 20,
+          "minimum": 1,
+          "title": "Max Pages",
+          "type": "integer"
+        },
+        "paths": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 20,
+          "title": "Paths",
+          "type": "array"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "title": "ToolArgs",
+      "type": "object"
+    },
+    "ToolCall": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "tool_call",
+          "title": "Kind",
+          "type": "string"
+        },
+        "tool": {
+          "enum": [
+            "http_probe",
+            "port_scan",
+            "crawl",
+            "content_discovery",
+            "template_scan",
+            "sql_check"
+          ],
+          "title": "Tool",
+          "type": "string"
+        },
+        "arguments": {
+          "$ref": "#/$defs/ToolArgs"
+        }
+      },
+      "required": [
+        "kind",
+        "tool",
+        "arguments"
+      ],
+      "title": "ToolCall",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "finding": "#/$defs/Finding",
+      "observation": "#/$defs/Observation",
+      "plan": "#/$defs/Plan",
+      "stop": "#/$defs/Stop",
+      "tool_call": "#/$defs/ToolCall"
+    },
+    "propertyName": "kind"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/Plan"
+    },
+    {
+      "$ref": "#/$defs/ToolCall"
+    },
+    {
+      "$ref": "#/$defs/Observation"
+    },
+    {
+      "$ref": "#/$defs/Finding"
+    },
+    {
+      "$ref": "#/$defs/Stop"
+    }
+  ]
+}

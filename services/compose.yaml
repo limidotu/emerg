@@ -1,0 +1,37 @@
+name: emerg-lab
+services:
+  juice-shop:
+    image: bkimminich/juice-shop:v17.1.1
+    networks: [lab]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    restart: "no"
+  vampi:
+    image: erev0s/vampi:latest
+    networks: [lab]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    restart: "no"
+  kali-runner:
+    image: emerg-kali:local
+    build:
+      context: ..
+      dockerfile: services/kali-runner/Dockerfile
+    profiles: [runner]
+    user: "10001:10001"
+    networks: [lab]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=128m,mode=1777
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 96
+    mem_limit: 512m
+    cpus: 1.0
+    init: true
+    environment:
+      HOME: /tmp
+    command: ["python3", "/opt/emerg/runtime.py", "serve"]
+networks:
+  lab:
+    internal: true

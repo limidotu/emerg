@@ -1,0 +1,17 @@
+id: emerg-exposed-directory
+info:
+  name: Public directory index
+  author: emerg
+  severity: low
+  description: A public directory index can expose files.
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/ftp/"
+    redirects: false
+    matchers:
+      - type: word
+        words:
+          - "acquisitions.md"
+        part: body
+

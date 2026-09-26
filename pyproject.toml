@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "emerg"
+version = "0.1.0"
+description = "Local, model-driven security tests for an isolated Juice Shop lab"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["typer>=0.16,<1", "textual>=3,<7", "pydantic>=2.10,<3", "httpx>=0.28,<1", "platformdirs>=4,<5"]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10", "pytest-asyncio>=0.25,<2", "ruff>=0.11,<1"]
+
+[project.scripts]
+emerg = "emergent_kali.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/emergent_kali"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"services" = "emergent_kali/bundle/services"
+"src/emergent_kali/runner_runtime.py" = "emergent_kali/bundle/src/emergent_kali/runner_runtime.py"
+".dockerignore" = "emergent_kali/bundle/.dockerignore"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP"]
