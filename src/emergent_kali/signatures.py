@@ -164,6 +164,10 @@ _FORM_ACTION = re.compile(
     r"""<form\b[^>]*\baction=(?:"([^"]*)"|'([^']*)'|([^\s>]+))""",
     re.IGNORECASE,
 )
+_BASE_HREF = re.compile(
+    r"""<base\b[^>]*\bhref=(?:"([^"]*)"|'([^']*)'|([^\s>]+))""",
+    re.IGNORECASE,
+)
 _NAMED_SEGMENT = re.compile(r'(?<![A-Za-z0-9_./:~-])(/[A-Za-z0-9_-]+)(?![A-Za-z0-9_./-])')
 _EXACT_PATH_VALUE = re.compile(r':\s*"(/[^"\\]{0,80})"')
 _QUOTED_ABSOLUTE = re.compile(r"""["'](/[A-Za-z0-9_./~-]{1,80})["']""")
@@ -544,18 +548,36 @@ def secured_reads(spec: str, record: dict) -> list[dict]:
     ]
 
 
+def _page_base(url: str, body: str) -> str:
+    """The base href for relative links. An external base does not count."""
+    if not isinstance(body, str) or _api_document(body):
+        return url
+    match = _BASE_HREF.search(body)
+    if not match:
+        return url
+    raw = match.group(1) or match.group(2) or match.group(3) or ""
+    if not raw or raw.startswith(("#", "mailto:", "javascript:")):
+        return url
+    joined = urljoin(url, raw.split("#", 1)[0])
+    parts = urlsplit(joined)
+    if parts.scheme not in {"", "http"} or (parts.netloc and parts.netloc not in allowed_netlocs()):
+        return url
+    return joined
+
+
 def linked_paths(record: dict) -> list[str]:
     """Same-origin links named by this page."""
     url = str(record.get("url") or "")
     body = record.get("body") or ""
     if not lab_path(url) or not isinstance(body, str):
         return []
+    base = _page_base(url, body)
     found = []
     for groups in _LINK.findall(body):
         raw = groups[0] or groups[1]
         if raw.startswith(("#", "mailto:", "javascript:")):
             continue
-        joined = urljoin(url, raw.split("#", 1)[0])
+        joined = urljoin(base, raw.split("#", 1)[0])
         parts = urlsplit(joined)
         if parts.scheme not in {"", "http"} or (parts.netloc and parts.netloc not in allowed_netlocs()):
             continue
@@ -571,12 +593,13 @@ def form_paths(record: dict) -> list[str]:
     body = record.get("body") or ""
     if not lab_path(url) or not isinstance(body, str) or _api_document(body):
         return []
+    base = _page_base(url, body)
     found = []
     for groups in _FORM_ACTION.findall(body):
         raw = groups[0] or groups[1] or groups[2]
         if not raw or raw.startswith(("#", "mailto:", "javascript:")):
             continue
-        joined = urljoin(url, raw.split("#", 1)[0])
+        joined = urljoin(base, raw.split("#", 1)[0])
         parts = urlsplit(joined)
         if parts.scheme not in {"", "http"} or (parts.netloc and parts.netloc not in allowed_netlocs()):
             continue

@@ -3759,6 +3759,19 @@ def test_a_form_action_names_a_same_origin_path(monkeypatch):
     assert "/secret-example" not in documented
 
 
+def test_a_base_href_resolves_a_relative_link(monkeypatch):
+    monkeypatch.setenv("EMERG_LAB_URL", "http://vampi:5000")
+    body = '<base href="/files/" /><a href="notes.txt"></a><form action="upload"></form><a href="/books/v1"></a>'
+    found = mentioned_paths({"url": "http://vampi:5000/ui/", "body": body})
+    assert "/files/notes.txt" in found
+    assert "/files/upload" in found
+    assert "/books/v1" in found
+    external = '<base href="http://evil.example/app/" /><a href="notes.txt"></a>'
+    skipped = mentioned_paths({"url": "http://vampi:5000/ui/", "body": external})
+    assert "/ui/notes.txt" in skipped
+    assert "/app/notes.txt" not in skipped
+
+
 def test_page_link_stays_on_the_same_origin():
     body = '<link href="./swagger-ui.css" /><a href="http://evil.example/admin">'
     assert mentioned_paths({"url": LAB_ORIGIN + "/ui/", "body": body}) == ["/ui/swagger-ui.css"]
