@@ -699,6 +699,102 @@ def test_another_account_can_change_a_password(monkeypatch, tmp_path):
     assert all(item["title"] != "Another account can change this password" for item in refused)
 
 
+def test_a_registered_admin_flag_is_on_the_account_page(monkeypatch, tmp_path):
+    monkeypatch.setenv("EMERG_LAB_URL", "http://vampi:5000")
+    from emergent_kali.runner_runtime import session_follow
+
+    def fake(method, path, payload=None, headers=None):
+        if method == "POST" and path.endswith("register"):
+            assert (payload or {}).get("admin") is True
+            return 200, '{"message":"Registered"}'
+        if method == "POST" and path.endswith("login"):
+            return 200, '{"auth_token":"token-value-1","message":"Successfully logged in."}'
+        if method == "GET" and path == "/me":
+            assert (headers or {}).get("Authorization", "").startswith("Bearer ")
+            return 200, '{"data":{"email":"e@example.com","username":"e1","admin": true}}'
+        if "debug" in path:
+            raise AssertionError(path)
+        return 404, "{}"
+
+    monkeypatch.setattr("emergent_kali.runner_runtime.lab_exchange", fake)
+    spec = {
+        "url": "http://vampi:5000/openapi.json",
+        "status": 200,
+        "body": json.dumps(
+            {
+                "openapi": "3.0.1",
+                "paths": {
+                    "/users/v1/login": {
+                        "post": {
+                            "requestBody": {
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"properties": {"username": {}, "password": {}}}
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "/users/v1/register": {
+                        "post": {
+                            "requestBody": {
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "properties": {"username": {}, "password": {}, "email": {}}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "/me": {
+                        "get": {
+                            "security": [{"bearerAuth": []}],
+                            "responses": {
+                                "200": {
+                                    "content": {
+                                        "application/json": {
+                                            "schema": {
+                                                "properties": {
+                                                    "data": {"properties": {"admin": {}, "email": {}}}
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                        }
+                    },
+                    "/users/v1/_debug": {
+                        "get": {
+                            "responses": {
+                                "200": {
+                                    "content": {
+                                        "application/json": {
+                                            "schema": {"properties": {"admin": {}}}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                },
+            }
+        ),
+    }
+    paths = (tmp_path / "spec.json", tmp_path / "session.json", tmp_path / "owners.json")
+    extra = session_follow([spec], *paths)
+    hits = [item for item in extra if item.get("body") == '"admin": true']
+    assert len(hits) == 1
+    assert hits[0]["url"].endswith("/me")
+    assert "email" not in hits[0]["body"]
+    found = detect(hits[0])
+    assert [item["title"] for item in found] == ["Public response shows an admin flag"]
+    assert found[0]["quote"] == '"admin": true'
+    assert found[0]["location"].endswith("/me")
+
+
 def test_login_errors_quote_the_known_account_response(monkeypatch):
     monkeypatch.setenv("EMERG_LAB_URL", "http://vampi:5000")
     found = detect(

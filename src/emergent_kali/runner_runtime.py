@@ -351,6 +351,23 @@ def _load_json(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _property_names(node) -> set[str]:
+    """Property names documented under this schema node."""
+    names: set[str] = set()
+    if isinstance(node, dict):
+        props = node.get("properties")
+        if isinstance(props, dict):
+            names.update(str(key) for key in props)
+        for key, item in node.items():
+            if key in {"example", "examples"}:
+                continue
+            names.update(_property_names(item))
+    elif isinstance(node, list):
+        for item in node:
+            names.update(_property_names(item))
+    return names
+
+
 def _schema_names(operation: dict) -> set[str]:
     """Property names on a documented request body."""
     content = operation.get("requestBody")
@@ -383,6 +400,7 @@ def _spec_summary(body: str) -> dict | None:
     login = ""
     register = ""
     password_update = ""
+    admin_read = ""
     templates = []
     plain = []
     for key, ops in paths.items():
@@ -409,6 +427,13 @@ def _spec_summary(body: str) -> dict | None:
             templates.append(key)
         elif isinstance(get, dict) and "security" in get and "{" not in key and key not in plain:
             plain.append(key)
+        if (
+            isinstance(get, dict)
+            and "{" not in key
+            and "debug" not in key.casefold()
+            and "admin" in _property_names(get)
+        ):
+            admin_read = key
     if not login and not templates and not plain and not register:
         return None
     return {
@@ -417,6 +442,7 @@ def _spec_summary(body: str) -> dict | None:
         "plain": plain,
         "register": register,
         "password_update": password_update,
+        "admin_read": admin_read,
     }
 
 
@@ -427,6 +453,8 @@ def _remember_spec(records: list[dict], spec_path: Path) -> dict:
         if summary:
             if saved.get("password_checked"):
                 summary["password_checked"] = True
+            if saved.get("admin_checked"):
+                summary["admin_checked"] = True
             spec_path.write_text(json.dumps(summary), encoding="utf-8")
             return summary
     return saved
@@ -562,6 +590,54 @@ def _password_change(summary: dict, sessions: dict, origin: str) -> dict | None:
     }
 
 
+def _assigned_admin(summary: dict, origin: str) -> dict | None:
+    """Register one account with a documented admin flag, then read that account."""
+    register = str(summary.get("register") or "")
+    account = str(summary.get("admin_read") or "")
+    if not register or not account or "{" in account:
+        return None
+    fresh = "e" + uuid.uuid4().hex[:8]
+    fresh_pass = uuid.uuid4().hex[:12]
+    try:
+        created, _raw = lab_exchange(
+            "POST",
+            register,
+            {
+                "username": fresh,
+                "password": fresh_pass,
+                "email": fresh + "@example.com",
+                "admin": True,
+            },
+        )
+    except (OSError, ValueError, http.client.HTTPException):
+        return None
+    if created >= 300:
+        return None
+    headers = None
+    login = str(summary.get("login") or "")
+    if login:
+        try:
+            _status, raw = lab_exchange(
+                "POST", login, {"username": fresh, "password": fresh_pass}
+            )
+        except (OSError, ValueError, http.client.HTTPException):
+            return None
+        token = _bearer(raw)
+        if not token:
+            return None
+        headers = {"Authorization": "Bearer " + token}
+    try:
+        status, raw = lab_exchange("GET", account, headers=headers)
+    except (OSError, ValueError, http.client.HTTPException):
+        return None
+    if status != 200:
+        return None
+    match = re.search(r'"admin"\s*:\s*true', raw)
+    if not match or match.group(0) not in raw:
+        return None
+    return {"url": origin + account, "status": status, "headers": {}, "body": match.group(0)}
+
+
 def session_follow(
     records: list[dict],
     spec_path: Path = _SPEC_PATH,
@@ -621,6 +697,12 @@ def session_follow(
         spec_path.write_text(json.dumps(summary), encoding="utf-8")
         if changed:
             extra.append(changed)
+    if summary.get("register") and summary.get("admin_read") and not summary.get("admin_checked"):
+        assigned = _assigned_admin(summary, origin)
+        summary["admin_checked"] = True
+        spec_path.write_text(json.dumps(summary), encoding="utf-8")
+        if assigned:
+            extra.append(assigned)
     templates = [item for item in summary.get("templates") or [] if isinstance(item, str)]
     plain = [item for item in summary.get("plain") or [] if isinstance(item, str)]
     for record in records:
