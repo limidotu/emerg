@@ -401,7 +401,10 @@ def _spec_summary(body: str) -> dict | None:
     register = ""
     password_update = ""
     email_update = ""
+    account_delete = ""
     admin_read = ""
+    register_names: set[str] = set()
+    deletes: list[tuple[str, str]] = []
     single_gets = []
     templates = []
     plain = []
@@ -420,6 +423,12 @@ def _spec_summary(body: str) -> dict | None:
             and "password" in post_names
         ):
             register = key
+            register_names = post_names
+        delete = ops.get("delete")
+        if isinstance(delete, dict) and key.count("{") == 1:
+            marker = re.search(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", key)
+            if marker:
+                deletes.append((key, marker.group(1)))
         put = ops.get("put")
         put_names = _schema_names(put) if isinstance(put, dict) else set()
         if isinstance(put, dict) and key.count("{") == 1 and "password" in put_names:
@@ -445,6 +454,10 @@ def _spec_summary(body: str) -> dict | None:
     if marker:
         email_name = marker.group(1)
     profile_reads = [key for key in single_gets if f"{{{email_name}}}" in key][:4] if email_name else []
+    for path, name in deletes:
+        if name in register_names:
+            account_delete = path
+            break
     if not login and not templates and not plain and not register:
         return None
     return {
@@ -454,6 +467,7 @@ def _spec_summary(body: str) -> dict | None:
         "register": register,
         "password_update": password_update,
         "email_update": email_update,
+        "account_delete": account_delete,
         "profile_reads": profile_reads,
         "admin_read": admin_read,
     }
@@ -470,6 +484,10 @@ def _remember_spec(records: list[dict], spec_path: Path) -> dict:
                 summary["admin_checked"] = True
             if saved.get("email_checked"):
                 summary["email_checked"] = True
+            if saved.get("delete_checked"):
+                summary["delete_checked"] = True
+            if saved.get("admins"):
+                summary["admins"] = saved["admins"]
             spec_path.write_text(json.dumps(summary), encoding="utf-8")
             return summary
     return saved
@@ -708,6 +726,87 @@ def _email_change(summary: dict, sessions: dict, origin: str) -> dict | None:
     return None
 
 
+def _privileged_users(records: list[dict]) -> set[str]:
+    """User names a captured body marks as admin."""
+    found: set[str] = set()
+
+    def visit(value) -> None:
+        if isinstance(value, list):
+            for item in value:
+                visit(item)
+            return
+        if not isinstance(value, dict):
+            return
+        name = value.get("username") if isinstance(value.get("username"), str) else ""
+        if not name and isinstance(value.get("user"), str):
+            name = value["user"]
+        if name and value.get("admin") is True:
+            found.add(name)
+        for item in value.values():
+            visit(item)
+
+    for record in records:
+        try:
+            visit(json.loads(record.get("body") or ""))
+        except (ValueError, TypeError):
+            continue
+    return found
+
+
+def _account_delete(summary: dict, sessions: dict, origin: str, admins: set[str]) -> dict | None:
+    """Create one account, then delete that account with a different account."""
+    register = str(summary.get("register") or "")
+    template = str(summary.get("account_delete") or "")
+    if not register or template.count("{") != 1 or not sessions:
+        return None
+    actor = next((name for name in sessions if name not in admins), "")
+    token = sessions.get(actor, "")
+    if not actor or not isinstance(token, str) or not token:
+        return None
+    fresh = "e" + uuid.uuid4().hex[:8]
+    fresh_pass = uuid.uuid4().hex[:12]
+    try:
+        created, _raw = lab_exchange(
+            "POST",
+            register,
+            {"username": fresh, "password": fresh_pass, "email": fresh + "@example.com"},
+        )
+    except (OSError, ValueError, http.client.HTTPException):
+        return None
+    if created >= 300 or fresh == actor:
+        return None
+    path = re.sub(r"\{[A-Za-z_][A-Za-z0-9_]*\}", fresh, template, count=1)
+    if fresh not in path or "{" in path:
+        return None
+    try:
+        status, raw = lab_exchange(
+            "DELETE",
+            path,
+            headers={"Authorization": "Bearer " + token},
+        )
+    except (OSError, ValueError, http.client.HTTPException):
+        return None
+    if status >= 300:
+        return None
+    message = _response_message(raw)
+    folded = message.casefold()
+    if (
+        not message
+        or "@" in message
+        or any(word in folded for word in ("fail", "error", "denied", "invalid", "unauthorized"))
+    ):
+        return None
+    body = json.dumps({"message": message})
+    if message not in body:
+        return None
+    return {
+        "url": origin + path,
+        "status": status,
+        "headers": {"X-Emerg-Delete": "1"},
+        "body": body,
+    }
+
+
 def _track_statuses(records: list[dict], origin: str, path: Path) -> dict:
     """Remember a 401 until a later session can read it. A 200 closes that path."""
     saved = _load_json(path)
@@ -806,6 +905,19 @@ def session_follow(
         spec_path.write_text(json.dumps(summary), encoding="utf-8")
         if mailed:
             extra.append(mailed)
+    admins = {item for item in summary.get("admins") or [] if isinstance(item, str)}
+    admins.update(_privileged_users(records))
+    ready_delete = bool(sessions) and summary.get("register") and summary.get("account_delete")
+    if ready_delete and not summary.get("delete_checked"):
+        removed = _account_delete(summary, sessions, origin, admins)
+        summary["delete_checked"] = True
+        summary["admins"] = sorted(admins)
+        spec_path.write_text(json.dumps(summary), encoding="utf-8")
+        if removed:
+            extra.append(removed)
+    elif admins and sorted(admins) != list(summary.get("admins") or []):
+        summary["admins"] = sorted(admins)
+        spec_path.write_text(json.dumps(summary), encoding="utf-8")
     templates = [item for item in summary.get("templates") or [] if isinstance(item, str)]
     plain = [item for item in summary.get("plain") or [] if isinstance(item, str)]
     denied_path = session_path.with_name(session_path.stem + "-denied.json")

@@ -635,6 +635,40 @@ def _changed_email(path: str, body: str, url: str, record: dict) -> dict | None:
     }
 
 
+def _deleted_account(path: str, body: str, url: str, record: dict) -> dict | None:
+    """Another account deleted this account. The quote is the success message."""
+    headers = record.get("headers") or {}
+    status = record.get("status")
+    if not isinstance(headers, dict) or headers.get("X-Emerg-Delete") != "1":
+        return None
+    if not isinstance(status, int) or status >= 300:
+        return None
+    match = re.search(r'"message"\s*:\s*"([^"]{8,160})"', body)
+    if not match:
+        return None
+    quote = match.group(1)
+    folded = quote.casefold()
+    if (
+        len(quote) < 8
+        or quote not in body
+        or "[REDACTED]" in quote
+        or "[redacted]" in quote
+        or "@" in quote
+        or any(word in folded for word in ("fail", "error", "denied", "invalid", "unauthorized"))
+    ):
+        return None
+    return {
+        "title": "Another account can delete this account",
+        "severity": "high",
+        "category": "Broken Access Control",
+        "location": url,
+        "quote": quote,
+        "reproduction": [f"DELETE {path}"],
+        "impact": "A credential for one account can delete another account.",
+        "remediation": "Allow an account delete only for the account that owns it.",
+    }
+
+
 def _opened_account(path: str, body: str, url: str, actor: str) -> dict | None:
     """A password from a public response returned this account."""
     if not re.fullmatch(r"[A-Za-z0-9._-]{1,40}", actor):
@@ -2294,6 +2328,9 @@ def detect(record: dict) -> list[dict]:
     mailed = _changed_email(path, body, record["url"], record)
     if mailed and not any(item["title"] == mailed["title"] for item in found):
         found.append(mailed)
+    removed = _deleted_account(path, body, record["url"], record)
+    if removed and not any(item["title"] == removed["title"] for item in found):
+        found.append(removed)
     if (record.get("headers") or {}).get("X-Emerg-Enum") == "1":
         found.extend(_login_difference(path, body, record["url"]))
     auth = _auth_exception(path, body, record["url"], status)

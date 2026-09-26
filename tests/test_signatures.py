@@ -830,6 +830,99 @@ def test_another_account_can_change_a_password(monkeypatch, tmp_path):
     assert all(item["title"] != "Another account can change this password" for item in refused)
 
 
+def test_another_account_can_delete_a_fresh_account(monkeypatch, tmp_path):
+    monkeypatch.setenv("EMERG_LAB_URL", "http://vampi:5000")
+    from emergent_kali.runner_runtime import session_follow
+
+    deleted = []
+
+    def fake(method, path, payload=None, headers=None):
+        if method == "POST" and path.endswith("login"):
+            user = (payload or {}).get("username", "")
+            token = "token-admin" if user == "admin" else "token-value-1"
+            return 200, json.dumps({"auth_token": token, "message": "Successfully logged in."})
+        if method == "POST":
+            return 200, '{"message":"Registered","status":"success"}'
+        if method == "DELETE":
+            deleted.append((path, (headers or {}).get("Authorization")))
+            return 200, '{"status":"success","message":"User deleted."}'
+        return 401, "{}"
+
+    monkeypatch.setattr("emergent_kali.runner_runtime.lab_exchange", fake)
+    spec = {
+        "url": "http://vampi:5000/openapi.json",
+        "status": 200,
+        "body": json.dumps(
+            {
+                "openapi": "3.0.1",
+                "paths": {
+                    "/users/v1/login": {
+                        "post": {
+                            "requestBody": {
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"properties": {"username": {}, "password": {}}}
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "/users/v1/register": {
+                        "post": {
+                            "requestBody": {
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "properties": {"username": {}, "password": {}, "email": {}}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "/users/v1/{username}": {"delete": {}},
+                    "/books/v1/{book_title}": {"delete": {}},
+                },
+            }
+        ),
+    }
+    debug = {
+        "url": "http://vampi:5000/users/v1/_debug",
+        "status": 200,
+        "body": json.dumps(
+            {
+                "users": [
+                    {"username": "admin", "password": "pw-admin", "admin": True},
+                    {"username": "name1", "password": "pw-one", "admin": False},
+                ]
+            }
+        ),
+    }
+    paths = (tmp_path / "spec.json", tmp_path / "session.json", tmp_path / "owners.json")
+    session_follow([spec], *paths)
+    extra = session_follow([debug], *paths)
+    hits = [item for item in extra if (item.get("headers") or {}).get("X-Emerg-Delete") == "1"]
+    assert len(hits) == 1
+    assert deleted[0][0].startswith("/users/v1/e")
+    assert deleted[0][1] == "Bearer token-value-1"
+    assert "admin" not in deleted[0][0]
+    found = [item for item in detect(hits[0]) if item["title"] == "Another account can delete this account"]
+    assert len(found) == 1
+    assert found[0]["quote"] == "User deleted."
+    assert found[0]["quote"] in hits[0]["body"]
+    assert "@" not in hits[0]["body"]
+    assert found[0]["reproduction"][0].startswith("DELETE /users/v1/e")
+    refused = detect(
+        {
+            "url": "http://vampi:5000/users/v1/e12345678",
+            "status": 401,
+            "headers": {"X-Emerg-Delete": "1"},
+            "body": '{"message":"Only Admins may delete users!"}',
+        }
+    )
+    assert all(item["title"] != "Another account can delete this account" for item in refused)
+
+
 def test_a_registered_admin_flag_is_on_the_account_page(monkeypatch, tmp_path):
     monkeypatch.setenv("EMERG_LAB_URL", "http://vampi:5000")
     from emergent_kali.runner_runtime import session_follow
