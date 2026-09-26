@@ -705,6 +705,67 @@ def test_write_checks_do_not_consume_the_retry_limit(monkeypatch, tmp_path):
     assert any((item.get("headers") or {}).get("X-Emerg-Write") == "1" for item in extra)
 
 
+def test_a_documented_403_has_its_own_retry_limit(monkeypatch, tmp_path):
+    monkeypatch.setenv("EMERG_LAB_URL", "http://vampi:5000")
+    from emergent_kali.runner_runtime import session_follow
+
+    gets = []
+
+    def fake(method, path, payload=None, headers=None):
+        if method == "POST":
+            return 200, '{"auth_token":"token-value-1"}'
+        if method == "GET":
+            gets.append(path)
+            return 200, "{}"
+        return 404, '{"title":"Not Found","status":404}'
+
+    monkeypatch.setattr("emergent_kali.runner_runtime.lab_exchange", fake)
+    spec = {
+        "url": "http://vampi:5000/openapi.json",
+        "status": 200,
+        "body": json.dumps(
+            {
+                "openapi": "3.0.1",
+                "paths": {
+                    "/users/v1/login": {"post": {}},
+                    "/books/v1/{book_title}": {"get": {"security": [{"bearerAuth": []}]}},
+                    "/items/v1/{item_id}": {"get": {"security": [{"bearerAuth": []}]}},
+                },
+            }
+        ),
+    }
+    debug = {
+        "url": "http://vampi:5000/users/v1/_debug",
+        "status": 200,
+        "body": '{"users":[{"username":"name1","password":"pw-one"},{"username":"name2","password":"pw-two"}]}',
+    }
+    books = {
+        "url": "http://vampi:5000/books/v1",
+        "status": 200,
+        "body": json.dumps(
+            {"Books": [{"book_title": f"bookTitle{index:02d}", "user": "name2"} for index in range(8)]}
+        ),
+    }
+    denied = [
+        {"url": f"http://vampi:5000/books/v1/bookTitle{index:02d}", "status": 401, "body": "{}"}
+        for index in range(8)
+    ]
+    forbidden = [
+        {"url": f"http://vampi:5000/items/v1/item{index:02d}", "status": 403, "body": "{}"}
+        for index in range(9)
+    ]
+    unknown = {"url": "http://vampi:5000/not-in-spec", "status": 403, "body": "{}"}
+    paths = (tmp_path / "spec.json", tmp_path / "session.json", tmp_path / "owners.json")
+    extra = session_follow([spec, debug, books, *denied, *forbidden, unknown], *paths)
+    book_reads = [item for item in gets if item.startswith("/books/v1/bookTitle")]
+    item_reads = [item for item in gets if item.startswith("/items/v1/item")]
+    assert len(book_reads) == 8
+    assert len(item_reads) == 8
+    assert "/items/v1/item08" not in gets
+    assert "/not-in-spec" not in gets
+    assert all((item.get("headers") or {}).get("X-Emerg-Actor") for item in extra if "/items/v1/" in str(item.get("url")))
+
+
 def test_a_public_password_can_read_an_account_page(monkeypatch, tmp_path):
     monkeypatch.setenv("EMERG_LAB_URL", "http://vampi:5000")
     from emergent_kali.runner_runtime import session_follow

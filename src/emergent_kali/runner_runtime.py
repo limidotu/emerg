@@ -808,9 +808,10 @@ def _account_delete(summary: dict, sessions: dict, origin: str, admins: set[str]
 
 
 def _track_statuses(records: list[dict], origin: str, path: Path) -> dict:
-    """Remember a 401 until a later session can read it. A 200 closes that path."""
+    """Remember a 401 or 403 until a later session can read it. A 200 closes that path."""
     saved = _load_json(path)
     denied = [item for item in saved.get("denied") or [] if isinstance(item, str)]
+    forbidden = [item for item in saved.get("forbidden") or [] if isinstance(item, str)]
     opened = [item for item in saved.get("opened") or [] if isinstance(item, str)]
     for record in records:
         url = str(record.get("url") or "")
@@ -823,9 +824,13 @@ def _track_statuses(records: list[dict], origin: str, path: Path) -> dict:
                 opened.append(item)
             if item in denied:
                 denied.remove(item)
+            if item in forbidden:
+                forbidden.remove(item)
         elif status == 401 and item not in denied and item not in opened:
             denied.append(item)
-    state = {"denied": denied[:40], "opened": opened[:80]}
+        elif status == 403 and item not in forbidden and item not in opened:
+            forbidden.append(item)
+    state = {"denied": denied[:40], "forbidden": forbidden[:40], "opened": opened[:80]}
     try:
         path.write_text(json.dumps(state), encoding="utf-8")
     except OSError:
@@ -980,8 +985,66 @@ def session_follow(
             }
         )
         retries += 1
-    if attempted:
+    forbidden_attempted = []
+    forbidden_retries = 0
+    for path in state.get("forbidden") or []:
+        if path in state["opened"] or forbidden_retries >= 8:
+            continue
+        if path in plain:
+            actor = next(iter(sessions), "")
+            token = sessions.get(actor, "")
+            if not actor or not token:
+                continue
+            try:
+                status, raw = lab_exchange("GET", path, headers={"Authorization": "Bearer " + token})
+            except (OSError, ValueError, http.client.HTTPException):
+                continue
+            forbidden_attempted.append(path)
+            if status == 200 and path not in state["opened"]:
+                state["opened"].append(path)
+            extra.append(
+                {
+                    "url": origin + path,
+                    "status": status,
+                    "headers": {"X-Emerg-Actor": actor},
+                    "body": scrub_lab_body(raw),
+                }
+            )
+            forbidden_retries += 1
+            continue
+        if not any(_path_matches(template, path) for template in templates):
+            if spec_ready:
+                forbidden_attempted.append(path)
+            continue
+        ident = path.rsplit("/", 1)[-1]
+        owner = ""
+        for table in owners.values():
+            if isinstance(table, dict) and ident in table and isinstance(table[ident], str):
+                owner = table[ident]
+                break
+        actor = next((name for name in sessions if name != owner), "") if owner else next(iter(sessions), "")
+        token = sessions.get(actor, "")
+        if not actor or not token:
+            continue
+        try:
+            status, raw = lab_exchange("GET", path, headers={"Authorization": "Bearer " + token})
+        except (OSError, ValueError, http.client.HTTPException):
+            continue
+        forbidden_attempted.append(path)
+        if status == 200 and path not in state["opened"]:
+            state["opened"].append(path)
+        extra.append(
+            {
+                "url": origin + path,
+                "status": status,
+                "headers": {"X-Emerg-Actor": actor},
+                "body": scrub_lab_body(raw),
+            }
+        )
+        forbidden_retries += 1
+    if attempted or forbidden_attempted:
         state["denied"] = [item for item in state["denied"] if item not in attempted]
+        state["forbidden"] = [item for item in state.get("forbidden") or [] if item not in forbidden_attempted]
         try:
             denied_path.write_text(json.dumps(state), encoding="utf-8")
         except OSError:
