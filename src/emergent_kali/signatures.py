@@ -160,6 +160,10 @@ def safe_read_path(path: str) -> bool:
 
 _QUOTED_PATH = re.compile(r'"(/[^"\\]{0,80})"\s*:')
 _LINK = re.compile(r"""(?:href|src)=(?:"([^"]+)"|'([^']+)')""")
+_FORM_ACTION = re.compile(
+    r"""<form\b[^>]*\baction=(?:"([^"]*)"|'([^']*)'|([^\s>]+))""",
+    re.IGNORECASE,
+)
 _NAMED_SEGMENT = re.compile(r'(?<![A-Za-z0-9_./:~-])(/[A-Za-z0-9_-]+)(?![A-Za-z0-9_./-])')
 _EXACT_PATH_VALUE = re.compile(r':\s*"(/[^"\\]{0,80})"')
 _QUOTED_ABSOLUTE = re.compile(r"""["'](/[A-Za-z0-9_./~-]{1,80})["']""")
@@ -247,6 +251,9 @@ def mentioned_paths(record: dict) -> list[str]:
         if path not in found:
             found.append(path)
     for path in linked_paths(record):
+        if path not in found:
+            found.append(path)
+    for path in form_paths(record):
         if path not in found:
             found.append(path)
     for path in header_paths(record):
@@ -555,6 +562,29 @@ def linked_paths(record: dict) -> list[str]:
         path = parts.path or "/"
         if safe_read_path(path) and path not in found:
             found.append(path)
+    return found
+
+
+def form_paths(record: dict) -> list[str]:
+    """Same-origin paths named by an HTML form action."""
+    url = str(record.get("url") or "")
+    body = record.get("body") or ""
+    if not lab_path(url) or not isinstance(body, str) or _api_document(body):
+        return []
+    found = []
+    for groups in _FORM_ACTION.findall(body):
+        raw = groups[0] or groups[1] or groups[2]
+        if not raw or raw.startswith(("#", "mailto:", "javascript:")):
+            continue
+        joined = urljoin(url, raw.split("#", 1)[0])
+        parts = urlsplit(joined)
+        if parts.scheme not in {"", "http"} or (parts.netloc and parts.netloc not in allowed_netlocs()):
+            continue
+        path = parts.path or "/"
+        if safe_read_path(path) and path not in found:
+            found.append(path)
+        if len(found) >= 8:
+            break
     return found
 
 

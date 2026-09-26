@@ -3696,6 +3696,23 @@ def test_absolute_same_origin_urls_are_read(monkeypatch):
     assert "/also-example" not in documented
 
 
+def test_a_form_action_names_a_same_origin_path(monkeypatch):
+    monkeypatch.setenv("EMERG_LAB_URL", "http://vampi:5000")
+    body = (
+        '<form action="/users/v1/login" method="post"></form>'
+        '<form action="http://evil.example/admin"></form>'
+        '<form action="javascript:alert(1)"></form>'
+        "<form action='./notes.txt'></form>"
+    )
+    found = mentioned_paths({"url": "http://vampi:5000/ui/", "body": body})
+    assert "/users/v1/login" in found
+    assert "/ui/notes.txt" in found
+    assert "/admin" not in found
+    spec = '{"openapi":"3.0.1","paths":{"/books/v1":{"get":{}}},"html":"<form action=\\"/secret-example\\"></form>"}'
+    documented = mentioned_paths({"url": "http://vampi:5000/openapi.json", "body": spec})
+    assert "/secret-example" not in documented
+
+
 def test_page_link_stays_on_the_same_origin():
     body = '<link href="./swagger-ui.css" /><a href="http://evil.example/admin">'
     assert mentioned_paths({"url": LAB_ORIGIN + "/ui/", "body": body}) == ["/ui/swagger-ui.css"]
