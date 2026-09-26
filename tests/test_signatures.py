@@ -425,6 +425,18 @@ def test_a_response_value_fills_one_documented_placeholder(monkeypatch):
     assert found[0]["quote"] == '"secret":'
 
 
+def test_one_placeholder_uses_sixteen_copied_values():
+    from emergent_kali.signatures import concrete_paths
+
+    titles = ",".join(f'{{"book_title":"bookTitle{index:02d}"}}' for index in range(17))
+    spec = '{"openapi":"3.0.1","paths":{"/books/v1/{book_title}":{"get":{}}}}'
+    body = '{"Books":[' + titles + "]}"
+    found = concrete_paths(spec, [{"url": "http://vampi:5000/books/v1", "body": body}])
+    assert len(found) == 16
+    assert found[0] == "/books/v1/bookTitle00"
+    assert "/books/v1/bookTitle16" not in found
+
+
 def test_a_json_number_fills_only_the_matching_placeholder(monkeypatch):
     monkeypatch.setenv("EMERG_LAB_URL", "http://vampi:5000")
     from emergent_kali.signatures import concrete_paths

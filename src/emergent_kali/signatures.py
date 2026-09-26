@@ -358,7 +358,7 @@ def concrete_paths(spec: str, records: list[dict]) -> list[str]:
                 bucket.append(value)
     found = []
     for template, name in templates:
-        for value in values.get(name, [])[:8]:
+        for value in values.get(name, [])[:16]:
             path = template.replace("{" + name + "}", value)
             if safe_read_path(path) and path not in found:
                 found.append(path)
