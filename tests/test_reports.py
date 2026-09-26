@@ -32,6 +32,21 @@ def test_environment_secret_and_terminal_escape_redaction(monkeypatch):
     assert redact({"nested": {"apiKey": "secret"}})["nested"]["apiKey"] == "[REDACTED]"
 
 
+def test_json_secret_assignment_stays_valid():
+    raw = (
+        '{"password":{"type":"string","example":"pass1"},'
+        '"secret":["hidden-value"],'
+        '"note":"Password is not correct for the given username."}'
+    )
+    cleaned = redact(raw)
+    parsed = json.loads(cleaned)
+    assert "pass1" not in cleaned
+    assert "hidden-value" not in cleaned
+    assert parsed["password"] == "[REDACTED]"
+    assert parsed["secret"] == "[REDACTED]"
+    assert "correct for the given username." in parsed["note"]
+
+
 async def test_all_report_formats_and_artifacts(store, config, tmp_path):
     engine = Engine(store, config)
     assert await engine.run() == 2
