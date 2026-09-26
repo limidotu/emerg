@@ -608,6 +608,33 @@ def _changed_password(path: str, body: str, url: str, record: dict) -> dict | No
     }
 
 
+def _changed_email(path: str, body: str, url: str, record: dict) -> dict | None:
+    """Another account changed this email. The quote is the new address."""
+    headers = record.get("headers") or {}
+    if not isinstance(headers, dict) or headers.get("X-Emerg-Mail") != "1":
+        return None
+    if "debug" in path.casefold():
+        return None
+    mail = _EMAIL.search(body)
+    if not mail:
+        return None
+    quote = mail.group(0)
+    if quote not in body or "[REDACTED]" in quote or len(quote) < 8:
+        return None
+    target = headers.get("X-Emerg-Target")
+    step = target if isinstance(target, str) and target.startswith("/") and "{" not in target else path
+    return {
+        "title": "Another account can change this email",
+        "severity": "high",
+        "category": "Broken Access Control",
+        "location": url,
+        "quote": quote,
+        "reproduction": [f"PUT {step}"],
+        "impact": "A credential for one account can change another account's email.",
+        "remediation": "Allow an email change only for the account that owns it.",
+    }
+
+
 def _opened_account(path: str, body: str, url: str, actor: str) -> dict | None:
     """A password from a public response returned this account."""
     if not re.fullmatch(r"[A-Za-z0-9._-]{1,40}", actor):
@@ -2264,6 +2291,9 @@ def detect(record: dict) -> list[dict]:
     changed = _changed_password(path, body, record["url"], record)
     if changed and not any(item["title"] == changed["title"] for item in found):
         found.append(changed)
+    mailed = _changed_email(path, body, record["url"], record)
+    if mailed and not any(item["title"] == mailed["title"] for item in found):
+        found.append(mailed)
     if (record.get("headers") or {}).get("X-Emerg-Enum") == "1":
         found.extend(_login_difference(path, body, record["url"]))
     auth = _auth_exception(path, body, record["url"], status)

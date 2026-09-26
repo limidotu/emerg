@@ -400,7 +400,9 @@ def _spec_summary(body: str) -> dict | None:
     login = ""
     register = ""
     password_update = ""
+    email_update = ""
     admin_read = ""
+    single_gets = []
     templates = []
     plain = []
     for key, ops in paths.items():
@@ -422,6 +424,8 @@ def _spec_summary(body: str) -> dict | None:
         put_names = _schema_names(put) if isinstance(put, dict) else set()
         if isinstance(put, dict) and key.count("{") == 1 and "password" in put_names:
             password_update = key
+        if isinstance(put, dict) and key.count("{") == 1 and "email" in put_names:
+            email_update = key
         get = ops.get("get")
         if isinstance(get, dict) and "security" in get and "{" in key:
             templates.append(key)
@@ -434,6 +438,13 @@ def _spec_summary(body: str) -> dict | None:
             and "admin" in _property_names(get)
         ):
             admin_read = key
+        if isinstance(get, dict) and key.count("{") == 1 and "debug" not in key.casefold():
+            single_gets.append(key)
+    email_name = ""
+    marker = re.search(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", email_update)
+    if marker:
+        email_name = marker.group(1)
+    profile_reads = [key for key in single_gets if f"{{{email_name}}}" in key][:4] if email_name else []
     if not login and not templates and not plain and not register:
         return None
     return {
@@ -442,6 +453,8 @@ def _spec_summary(body: str) -> dict | None:
         "plain": plain,
         "register": register,
         "password_update": password_update,
+        "email_update": email_update,
+        "profile_reads": profile_reads,
         "admin_read": admin_read,
     }
 
@@ -455,6 +468,8 @@ def _remember_spec(records: list[dict], spec_path: Path) -> dict:
                 summary["password_checked"] = True
             if saved.get("admin_checked"):
                 summary["admin_checked"] = True
+            if saved.get("email_checked"):
+                summary["email_checked"] = True
             spec_path.write_text(json.dumps(summary), encoding="utf-8")
             return summary
     return saved
@@ -638,6 +653,61 @@ def _assigned_admin(summary: dict, origin: str) -> dict | None:
     return {"url": origin + account, "status": status, "headers": {}, "body": match.group(0)}
 
 
+def _email_change(summary: dict, sessions: dict, origin: str) -> dict | None:
+    """Create one account, then update its email with a different account."""
+    register = str(summary.get("register") or "")
+    update = str(summary.get("email_update") or "")
+    reads = [item for item in summary.get("profile_reads") or [] if isinstance(item, str)]
+    if not register or not update or "{" not in update or not reads or not sessions:
+        return None
+    actor = next(iter(sessions), "")
+    token = sessions.get(actor, "")
+    if not actor or not isinstance(token, str) or not token:
+        return None
+    fresh = "e" + uuid.uuid4().hex[:8]
+    fresh_pass = uuid.uuid4().hex[:12]
+    new_mail = fresh + "x@example.com"
+    try:
+        created, _raw = lab_exchange(
+            "POST",
+            register,
+            {"username": fresh, "password": fresh_pass, "email": fresh + "@example.com"},
+        )
+    except (OSError, ValueError, http.client.HTTPException):
+        return None
+    if created >= 300:
+        return None
+    path = re.sub(r"\{[A-Za-z_][A-Za-z0-9_]*\}", fresh, update, count=1)
+    try:
+        status, _raw = lab_exchange(
+            "PUT",
+            path,
+            {"email": new_mail},
+            headers={"Authorization": "Bearer " + token},
+        )
+    except (OSError, ValueError, http.client.HTTPException):
+        return None
+    if status >= 300:
+        return None
+    for template in reads:
+        profile = re.sub(r"\{[A-Za-z_][A-Za-z0-9_]*\}", fresh, template, count=1)
+        if "debug" in profile.casefold() or "{" in profile:
+            continue
+        try:
+            read_status, raw = lab_exchange("GET", profile)
+        except (OSError, ValueError, http.client.HTTPException):
+            continue
+        if read_status != 200 or new_mail not in raw or "[REDACTED]" in raw:
+            continue
+        return {
+            "url": origin + profile,
+            "status": read_status,
+            "headers": {"X-Emerg-Actor": actor, "X-Emerg-Mail": "1", "X-Emerg-Target": path},
+            "body": scrub_lab_body(raw),
+        }
+    return None
+
+
 def session_follow(
     records: list[dict],
     spec_path: Path = _SPEC_PATH,
@@ -703,6 +773,13 @@ def session_follow(
         spec_path.write_text(json.dumps(summary), encoding="utf-8")
         if assigned:
             extra.append(assigned)
+    ready_mail = bool(sessions) and summary.get("register") and summary.get("email_update")
+    if ready_mail and summary.get("profile_reads") and not summary.get("email_checked"):
+        mailed = _email_change(summary, sessions, origin)
+        summary["email_checked"] = True
+        spec_path.write_text(json.dumps(summary), encoding="utf-8")
+        if mailed:
+            extra.append(mailed)
     templates = [item for item in summary.get("templates") or [] if isinstance(item, str)]
     plain = [item for item in summary.get("plain") or [] if isinstance(item, str)]
     for record in records:

@@ -795,6 +795,92 @@ def test_a_registered_admin_flag_is_on_the_account_page(monkeypatch, tmp_path):
     assert found[0]["location"].endswith("/me")
 
 
+def test_another_account_can_change_an_email(monkeypatch, tmp_path):
+    monkeypatch.setenv("EMERG_LAB_URL", "http://vampi:5000")
+    from emergent_kali.runner_runtime import session_follow
+
+    seen = {"email": ""}
+
+    def fake(method, path, payload=None, headers=None):
+        if method == "POST" and path.endswith("login"):
+            if (payload or {}).get("password") == "pw-one":
+                return 200, '{"auth_token":"token-value-1"}'
+            return 401, "{}"
+        if method == "POST":
+            return 200, '{"message":"Registered"}'
+        if method == "PUT":
+            seen["email"] = str((payload or {}).get("email") or "")
+            return 204, ""
+        if method == "GET" and "/users/v1/" in path and "debug" not in path:
+            user = path.rsplit("/", 1)[-1]
+            return 200, json.dumps({"email": seen["email"], "username": user})
+        return 404, "{}"
+
+    monkeypatch.setattr("emergent_kali.runner_runtime.lab_exchange", fake)
+    spec = {
+        "url": "http://vampi:5000/openapi.json",
+        "status": 200,
+        "body": json.dumps(
+            {
+                "openapi": "3.0.1",
+                "paths": {
+                    "/users/v1/login": {
+                        "post": {
+                            "requestBody": {
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"properties": {"username": {}, "password": {}}}
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "/users/v1/register": {
+                        "post": {
+                            "requestBody": {
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "properties": {"username": {}, "password": {}, "email": {}}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "/users/v1/{username}/email": {
+                        "put": {
+                            "requestBody": {
+                                "content": {"application/json": {"schema": {"properties": {"email": {}}}}}
+                            }
+                        }
+                    },
+                    "/users/v1/{username}": {"get": {}},
+                    "/books/v1/{book_title}": {"get": {}},
+                },
+            }
+        ),
+    }
+    debug = {
+        "url": "http://vampi:5000/users/v1/_debug",
+        "status": 200,
+        "body": '{"users":[{"username":"name1","password":"pw-one"}]}',
+    }
+    paths = (tmp_path / "spec.json", tmp_path / "session.json", tmp_path / "owners.json")
+    session_follow([spec], *paths)
+    extra = session_follow([debug], *paths)
+    hits = [item for item in extra if (item.get("headers") or {}).get("X-Emerg-Mail") == "1"]
+    assert len(hits) == 1
+    assert hits[0]["url"].endswith("/users/v1/" + hits[0]["url"].rsplit("/", 1)[-1])
+    assert "/books/" not in hits[0]["url"]
+    found = detect(hits[0])
+    assert [item["title"] for item in found] == ["Another account can change this email"]
+    assert found[0]["quote"].endswith("@example.com")
+    assert found[0]["quote"] in hits[0]["body"]
+    assert found[0]["reproduction"][0].startswith("PUT /users/v1/")
+    assert found[0]["reproduction"][0].endswith("/email")
+
+
 def test_login_errors_quote_the_known_account_response(monkeypatch):
     monkeypatch.setenv("EMERG_LAB_URL", "http://vampi:5000")
     found = detect(
