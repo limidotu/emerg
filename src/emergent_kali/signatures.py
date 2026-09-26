@@ -573,6 +573,41 @@ def _login_difference(path: str, body: str, url: str) -> list[dict]:
     ]
 
 
+def _changed_password(path: str, body: str, url: str, record: dict) -> dict | None:
+    """Another account changed this password. The quote is the success message."""
+    headers = record.get("headers") or {}
+    if not isinstance(headers, dict) or headers.get("X-Emerg-Write") != "1":
+        return None
+    match = re.search(r'"message"\s*:\s*"([^"]{8,160})"', body)
+    if not match:
+        return None
+    quote = match.group(1)
+    if "[REDACTED]" in quote or "[redacted]" in quote:
+        parts = [part.strip() for part in re.split(r"\[REDACTED\]|\[redacted\]", quote)]
+        quote = max(parts, key=len, default="")
+    folded = quote.casefold()
+    if (
+        len(quote) < 8
+        or quote not in body
+        or "[REDACTED]" in quote
+        or "[redacted]" in quote
+        or any(word in folded for word in ("fail", "error", "denied", "invalid", "unauthorized"))
+    ):
+        return None
+    target = headers.get("X-Emerg-Target")
+    step = target if isinstance(target, str) and target.startswith("/") and "{" not in target else path
+    return {
+        "title": "Another account can change this password",
+        "severity": "high",
+        "category": "Broken Access Control",
+        "location": url,
+        "quote": quote,
+        "reproduction": [f"PUT {step}"],
+        "impact": "A credential for one account can change another account's password.",
+        "remediation": "Allow a password change only for the account that owns it.",
+    }
+
+
 def _opened_account(path: str, body: str, url: str, actor: str) -> dict | None:
     """A password from a public response returned this account."""
     if not re.fullmatch(r"[A-Za-z0-9._-]{1,40}", actor):
@@ -2226,6 +2261,9 @@ def detect(record: dict) -> list[dict]:
         opened = _opened_account(path, body, record["url"], actor)
         if opened and not any(item["title"] == opened["title"] for item in found):
             found.append(opened)
+    changed = _changed_password(path, body, record["url"], record)
+    if changed and not any(item["title"] == changed["title"] for item in found):
+        found.append(changed)
     if (record.get("headers") or {}).get("X-Emerg-Enum") == "1":
         found.extend(_login_difference(path, body, record["url"]))
     auth = _auth_exception(path, body, record["url"], status)

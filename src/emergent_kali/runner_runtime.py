@@ -351,6 +351,27 @@ def _load_json(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _schema_names(operation: dict) -> set[str]:
+    """Property names on a documented request body."""
+    content = operation.get("requestBody")
+    if not isinstance(content, dict):
+        return set()
+    media = content.get("content")
+    if not isinstance(media, dict):
+        return set()
+    names: set[str] = set()
+    for item in media.values():
+        if not isinstance(item, dict):
+            continue
+        schema = item.get("schema")
+        if not isinstance(schema, dict):
+            continue
+        props = schema.get("properties")
+        if isinstance(props, dict):
+            names.update(str(key) for key in props)
+    return names
+
+
 def _spec_summary(body: str) -> dict | None:
     try:
         data = json.loads(body)
@@ -360,6 +381,8 @@ def _spec_summary(body: str) -> dict | None:
     if not isinstance(paths, dict):
         return None
     login = ""
+    register = ""
+    password_update = ""
     templates = []
     plain = []
     for key, ops in paths.items():
@@ -367,14 +390,34 @@ def _spec_summary(body: str) -> dict | None:
             continue
         if "post" in ops and "login" in key.casefold() and "{" not in key:
             login = key
+        post = ops.get("post")
+        post_names = _schema_names(post) if isinstance(post, dict) else set()
+        if (
+            isinstance(post, dict)
+            and "{" not in key
+            and "login" not in key.casefold()
+            and "username" in post_names
+            and "password" in post_names
+        ):
+            register = key
+        put = ops.get("put")
+        put_names = _schema_names(put) if isinstance(put, dict) else set()
+        if isinstance(put, dict) and key.count("{") == 1 and "password" in put_names:
+            password_update = key
         get = ops.get("get")
         if isinstance(get, dict) and "security" in get and "{" in key:
             templates.append(key)
         elif isinstance(get, dict) and "security" in get and "{" not in key and key not in plain:
             plain.append(key)
-    if not login and not templates and not plain:
+    if not login and not templates and not plain and not register:
         return None
-    return {"login": login, "templates": templates, "plain": plain}
+    return {
+        "login": login,
+        "templates": templates,
+        "plain": plain,
+        "register": register,
+        "password_update": password_update,
+    }
 
 
 def _remember_spec(records: list[dict], spec_path: Path) -> dict:
@@ -382,6 +425,8 @@ def _remember_spec(records: list[dict], spec_path: Path) -> dict:
     for record in records:
         summary = _spec_summary(record.get("body") or "")
         if summary:
+            if saved.get("password_checked"):
+                summary["password_checked"] = True
             spec_path.write_text(json.dumps(summary), encoding="utf-8")
             return summary
     return saved
@@ -446,6 +491,77 @@ def _path_matches(template: str, path: str) -> bool:
     return re.fullmatch("/".join(parts), path) is not None
 
 
+def _response_message(body: str) -> str:
+    """A short JSON message copied from this response."""
+    match = re.search(r'"message"\s*:\s*"([^"]{8,160})"', body)
+    if not match:
+        return ""
+    quote = match.group(1)
+    if quote not in body or "[REDACTED]" in quote or "[redacted]" in quote:
+        return ""
+    return quote
+
+
+def _password_change(summary: dict, sessions: dict, origin: str) -> dict | None:
+    """Create one account, then update its password with a different account."""
+    register = str(summary.get("register") or "")
+    update = str(summary.get("password_update") or "")
+    if not register or not update or "{" not in update or not sessions:
+        return None
+    actor = next(iter(sessions), "")
+    token = sessions.get(actor, "")
+    if not actor or not isinstance(token, str) or not token:
+        return None
+    fresh = "e" + uuid.uuid4().hex[:8]
+    fresh_pass = uuid.uuid4().hex[:12]
+    try:
+        created, _raw = lab_exchange(
+            "POST",
+            register,
+            {"username": fresh, "password": fresh_pass, "email": fresh + "@example.com"},
+        )
+    except (OSError, ValueError, http.client.HTTPException):
+        return None
+    if created >= 300:
+        return None
+    path = re.sub(r"\{[A-Za-z_][A-Za-z0-9_]*\}", fresh, update, count=1)
+    try:
+        status, raw = lab_exchange(
+            "PUT",
+            path,
+            {"password": fresh_pass + "x"},
+            headers={"Authorization": "Bearer " + token},
+        )
+    except (OSError, ValueError, http.client.HTTPException):
+        return None
+    if status >= 300:
+        return None
+    headers = {"X-Emerg-Actor": actor, "X-Emerg-Write": "1"}
+    if _response_message(raw):
+        return {"url": origin + path, "status": status, "headers": headers, "body": scrub_lab_body(raw)}
+    login = str(summary.get("login") or "")
+    if not login:
+        return None
+    try:
+        _new_status, new_raw = lab_exchange(
+            "POST", login, {"username": fresh, "password": fresh_pass + "x"}
+        )
+        old_status, old_raw = lab_exchange(
+            "POST", login, {"username": fresh, "password": fresh_pass}
+        )
+    except (OSError, ValueError, http.client.HTTPException):
+        return None
+    if not _bearer(new_raw) or _bearer(old_raw) or not _response_message(old_raw):
+        return None
+    headers["X-Emerg-Target"] = path
+    return {
+        "url": origin + login,
+        "status": old_status,
+        "headers": headers,
+        "body": scrub_lab_body(old_raw),
+    }
+
+
 def session_follow(
     records: list[dict],
     spec_path: Path = _SPEC_PATH,
@@ -498,6 +614,13 @@ def session_follow(
                     "body": scrub_lab_body(known_raw),
                 }
             )
+    ready = bool(sessions) and summary.get("register") and summary.get("password_update")
+    if ready and not summary.get("password_checked"):
+        changed = _password_change(summary, sessions, origin)
+        summary["password_checked"] = True
+        spec_path.write_text(json.dumps(summary), encoding="utf-8")
+        if changed:
+            extra.append(changed)
     templates = [item for item in summary.get("templates") or [] if isinstance(item, str)]
     plain = [item for item in summary.get("plain") or [] if isinstance(item, str)]
     for record in records:
