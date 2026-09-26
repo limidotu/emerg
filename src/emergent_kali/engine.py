@@ -1144,7 +1144,7 @@ class Engine:
                     queue.append(path)
 
     async def read_one_unread(self) -> None:
-        """After the model stops, read one path a captured response already named."""
+        """After the model stops, read the safe GET paths a captured response already named."""
         if self.config.depth != "deep":
             return
         origin = lab_origin()
@@ -1165,7 +1165,7 @@ class Engine:
             ToolCall(
                 kind="tool_call",
                 tool="content_discovery",
-                arguments=ToolArgs(url=origin, paths=pending[:1], max_pages=20, ports=[port]),
+                arguments=ToolArgs(url=origin, paths=pending[:20], max_pages=20, ports=[port]),
             ),
         )
 
