@@ -3772,6 +3772,20 @@ def test_a_base_href_resolves_a_relative_link(monkeypatch):
     assert "/app/notes.txt" not in skipped
 
 
+def test_a_formaction_names_a_same_origin_path(monkeypatch):
+    monkeypatch.setenv("EMERG_LAB_URL", "http://vampi:5000")
+    body = (
+        '<button formaction="/users/v1/login"></button>'
+        '<input formaction="http://evil.example/admin" />'
+        '<button formaction="javascript:alert(1)"></button>'
+        "<input formaction='./notes.txt' />"
+    )
+    found = mentioned_paths({"url": "http://vampi:5000/ui/", "body": body})
+    assert "/users/v1/login" in found
+    assert "/ui/notes.txt" in found
+    assert "/admin" not in found
+
+
 def test_page_link_stays_on_the_same_origin():
     body = '<link href="./swagger-ui.css" /><a href="http://evil.example/admin">'
     assert mentioned_paths({"url": LAB_ORIGIN + "/ui/", "body": body}) == ["/ui/swagger-ui.css"]

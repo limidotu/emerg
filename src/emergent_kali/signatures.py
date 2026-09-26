@@ -164,6 +164,10 @@ _FORM_ACTION = re.compile(
     r"""<form\b[^>]*\baction=(?:"([^"]*)"|'([^']*)'|([^\s>]+))""",
     re.IGNORECASE,
 )
+_FORM_CONTROL = re.compile(
+    r"""<(?:button|input)\b[^>]*\bformaction=(?:"([^"]*)"|'([^']*)'|([^\s>]+))""",
+    re.IGNORECASE,
+)
 _BASE_HREF = re.compile(
     r"""<base\b[^>]*\bhref=(?:"([^"]*)"|'([^']*)'|([^\s>]+))""",
     re.IGNORECASE,
@@ -595,17 +599,20 @@ def form_paths(record: dict) -> list[str]:
         return []
     base = _page_base(url, body)
     found = []
-    for groups in _FORM_ACTION.findall(body):
-        raw = groups[0] or groups[1] or groups[2]
-        if not raw or raw.startswith(("#", "mailto:", "javascript:")):
-            continue
-        joined = urljoin(base, raw.split("#", 1)[0])
-        parts = urlsplit(joined)
-        if parts.scheme not in {"", "http"} or (parts.netloc and parts.netloc not in allowed_netlocs()):
-            continue
-        path = parts.path or "/"
-        if safe_read_path(path) and path not in found:
-            found.append(path)
+    for pattern in (_FORM_ACTION, _FORM_CONTROL):
+        for groups in pattern.findall(body):
+            raw = groups[0] or groups[1] or groups[2]
+            if not raw or raw.startswith(("#", "mailto:", "javascript:")):
+                continue
+            joined = urljoin(base, raw.split("#", 1)[0])
+            parts = urlsplit(joined)
+            if parts.scheme not in {"", "http"} or (parts.netloc and parts.netloc not in allowed_netlocs()):
+                continue
+            path = parts.path or "/"
+            if safe_read_path(path) and path not in found:
+                found.append(path)
+            if len(found) >= 8:
+                break
         if len(found) >= 8:
             break
     return found
