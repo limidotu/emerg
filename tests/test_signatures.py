@@ -3606,6 +3606,35 @@ def test_location_and_link_headers_name_same_origin_paths(monkeypatch):
     assert found == ["/users/v1/name1", "/books/v1", "/ui/"]
 
 
+def test_absolute_same_origin_urls_are_read(monkeypatch):
+    monkeypatch.setenv("EMERG_LAB_URL", "http://vampi:5000")
+    body = json.dumps(
+        {
+            "next": "http://vampi:5000/books/v1",
+            "note": "See http://vampi:5000/hidden for notes",
+            "away": "http://evil.example/admin",
+        }
+    )
+    found = mentioned_paths({"url": "http://vampi:5000/users/v1", "body": body})
+    assert "/books/v1" in found
+    assert "/hidden" not in found
+    assert "/admin" not in found
+    spec = json.dumps(
+        {
+            "openapi": "3.0.1",
+            "paths": {"/books/v1": {"get": {}}},
+            "example": "http://vampi:5000/secret-example",
+            "components": {"examples": {"one": {"value": "http://vampi:5000/also-example"}}},
+            "servers": [{"url": "http://vampi:5000/live"}],
+        }
+    )
+    documented = mentioned_paths({"url": "http://vampi:5000/openapi.json", "body": spec})
+    assert "/books/v1" in documented
+    assert "/live" in documented
+    assert "/secret-example" not in documented
+    assert "/also-example" not in documented
+
+
 def test_page_link_stays_on_the_same_origin():
     body = '<link href="./swagger-ui.css" /><a href="http://evil.example/admin">'
     assert mentioned_paths({"url": LAB_ORIGIN + "/ui/", "body": body}) == ["/ui/swagger-ui.css"]

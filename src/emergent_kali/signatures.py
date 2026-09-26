@@ -196,6 +196,45 @@ def header_paths(record: dict) -> list[str]:
     return found
 
 
+def absolute_url_paths(body: str) -> list[str]:
+    """Paths named by absolute same-origin URLs in JSON strings."""
+    if not isinstance(body, str):
+        return []
+    stripped = body.lstrip()
+    if not stripped.startswith("{") and not stripped.startswith("["):
+        return []
+    try:
+        data = json.loads(body)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return []
+    document = _api_document(body)
+    found = []
+
+    def visit(value, under_example: bool) -> None:
+        if len(found) >= 8:
+            return
+        if isinstance(value, list):
+            for item in value:
+                visit(item, under_example)
+            return
+        if isinstance(value, dict):
+            for key, item in value.items():
+                skip = under_example or (document and str(key).casefold() in {"example", "examples"})
+                visit(item, skip)
+            return
+        if under_example or not isinstance(value, str) or not value.startswith("http://") or any(char.isspace() for char in value):
+            return
+        parts = urlsplit(value.split("#", 1)[0])
+        if parts.scheme != "http" or parts.netloc not in allowed_netlocs():
+            return
+        path = parts.path or "/"
+        if safe_read_path(path) and path not in found:
+            found.append(path)
+
+    visit(data, False)
+    return found
+
+
 def mentioned_paths(record: dict) -> list[str]:
     """Paths named by this response. Prose that merely contains a slash does not count."""
     body = record.get("body") or ""
@@ -211,6 +250,9 @@ def mentioned_paths(record: dict) -> list[str]:
         if path not in found:
             found.append(path)
     for path in header_paths(record):
+        if path not in found:
+            found.append(path)
+    for path in absolute_url_paths(body):
         if path not in found:
             found.append(path)
     if isinstance(body, str) and not _api_document(body):
