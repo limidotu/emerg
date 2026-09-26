@@ -3591,6 +3591,21 @@ def test_api_document_examples_are_not_a_data_leak():
     assert detect({"url": LAB_ORIGIN + "/openapi.json", "status": 200, "body": body}) == []
 
 
+def test_location_and_link_headers_name_same_origin_paths(monkeypatch):
+    monkeypatch.setenv("EMERG_LAB_URL", "http://vampi:5000")
+    record = {
+        "url": "http://vampi:5000/users/v1",
+        "status": 200,
+        "body": "{}",
+        "headers": {
+            "Location": "/users/v1/name1",
+            "Link": '</books/v1>; rel="next", <http://vampi:5000/ui/>; rel="alternate", <http://evil.example/admin>; rel="external"',
+        },
+    }
+    found = mentioned_paths(record)
+    assert found == ["/users/v1/name1", "/books/v1", "/ui/"]
+
+
 def test_page_link_stays_on_the_same_origin():
     body = '<link href="./swagger-ui.css" /><a href="http://evil.example/admin">'
     assert mentioned_paths({"url": LAB_ORIGIN + "/ui/", "body": body}) == ["/ui/swagger-ui.css"]

@@ -165,6 +165,37 @@ _EXACT_PATH_VALUE = re.compile(r':\s*"(/[^"\\]{0,80})"')
 _QUOTED_ABSOLUTE = re.compile(r"""["'](/[A-Za-z0-9_./~-]{1,80})["']""")
 
 
+_HEADER_LINK = re.compile(r"<([^>\s]+)>")
+
+
+def header_paths(record: dict) -> list[str]:
+    """Same-origin paths named by a Location or Link header."""
+    url = str(record.get("url") or "")
+    if not lab_path(url):
+        return []
+    raw_values = []
+    location = _header(record, "location")
+    if location:
+        raw_values.append(location.split(";", 1)[0].strip())
+    link = _header(record, "link")
+    if link:
+        raw_values.extend(_HEADER_LINK.findall(link))
+    found = []
+    for raw in raw_values:
+        if not raw or raw.startswith(("#", "mailto:", "javascript:")):
+            continue
+        joined = urljoin(url, raw.split("#", 1)[0])
+        parts = urlsplit(joined)
+        if parts.scheme not in {"", "http"} or (parts.netloc and parts.netloc not in allowed_netlocs()):
+            continue
+        path = parts.path or "/"
+        if safe_read_path(path) and path not in found:
+            found.append(path)
+        if len(found) >= 8:
+            break
+    return found
+
+
 def mentioned_paths(record: dict) -> list[str]:
     """Paths named by this response. Prose that merely contains a slash does not count."""
     body = record.get("body") or ""
@@ -177,6 +208,9 @@ def mentioned_paths(record: dict) -> list[str]:
         if path not in found:
             found.append(path)
     for path in linked_paths(record):
+        if path not in found:
+            found.append(path)
+    for path in header_paths(record):
         if path not in found:
             found.append(path)
     if isinstance(body, str) and not _api_document(body):
