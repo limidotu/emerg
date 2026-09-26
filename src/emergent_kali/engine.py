@@ -1108,7 +1108,7 @@ class Engine:
         seen: set[str] = set()
         queue = list(START_PATHS)
         spec_body = ""
-        for _ in range(6):
+        for _ in range(7):
             if spec_body:
                 front = [path for path in priority_paths(spec_body) if path not in seen]
                 queue = front + [path for path in queue if path not in front]
