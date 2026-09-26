@@ -766,6 +766,52 @@ def test_a_documented_403_has_its_own_retry_limit(monkeypatch, tmp_path):
     assert all((item.get("headers") or {}).get("X-Emerg-Actor") for item in extra if "/items/v1/" in str(item.get("url")))
 
 
+def test_a_direct_exchange_keeps_safe_response_headers(monkeypatch, tmp_path):
+    monkeypatch.setenv("EMERG_LAB_URL", "http://vampi:5000")
+    from emergent_kali.runner_runtime import session_follow
+
+    def fake(method, path, payload=None, headers=None):
+        fake.last_headers = {
+            "Server": "Werkzeug/2.2.2",
+            "Location": "/books/v1",
+            "Link": '</ui/>; rel="alternate"',
+            "Content-Disposition": "inline",
+            "Set-Cookie": "sid=secret",
+            "Authorization": "Bearer secret",
+        }
+        if method == "POST":
+            return 200, '{"auth_token":"token-value-1"}'
+        return 200, '{"username":"name1","email":"name1@mail.com"}'
+
+    monkeypatch.setattr("emergent_kali.runner_runtime.lab_exchange", fake)
+    spec = {
+        "url": "http://vampi:5000/openapi.json",
+        "status": 200,
+        "body": (
+            '{"openapi":"3.0.1","paths":{"/users/v1/login":{"post":{}},'
+            '"/me":{"get":{"security":[{"bearerAuth":[]}]}}}}'
+        ),
+    }
+    denied = {"url": "http://vampi:5000/me", "status": 401, "body": "{}"}
+    debug = {
+        "url": "http://vampi:5000/users/v1/_debug",
+        "status": 200,
+        "body": '{"users":[{"username":"name1","password":"pw-one"}]}',
+    }
+    paths = (tmp_path / "spec.json", tmp_path / "session.json", tmp_path / "owners.json")
+    session_follow([spec, denied], *paths)
+    extra = session_follow([debug], *paths)
+    kept = extra[0]["headers"]
+    folded = {str(key).lower(): value for key, value in kept.items()}
+    assert folded["server"] == "Werkzeug/2.2.2"
+    assert folded["location"] == "/books/v1"
+    assert folded["link"].startswith("</ui/>")
+    assert folded["content-disposition"] == "inline"
+    assert "set-cookie" not in folded
+    assert "authorization" not in folded
+    assert folded["x-emerg-actor"] == "name1"
+
+
 def test_a_public_password_can_read_an_account_page(monkeypatch, tmp_path):
     monkeypatch.setenv("EMERG_LAB_URL", "http://vampi:5000")
     from emergent_kali.runner_runtime import session_follow

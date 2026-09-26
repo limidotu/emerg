@@ -333,6 +333,11 @@ def lab_exchange(
         conn.request(method, path, body=body, headers=sent)
         response = conn.getresponse()
         raw = response.read(8192).decode("utf-8", "replace")
+        kept = {}
+        for key, value in response.getheaders():
+            if key.lower() in {"location", "link", "content-disposition", "server"} and value:
+                kept[key] = value
+        lab_exchange.last_headers = kept
         return response.status, raw
     finally:
         conn.close()
@@ -341,6 +346,20 @@ def lab_exchange(
 _SPEC_PATH = Path("/tmp/emerg-spec.json")
 _SESSION_PATH = Path("/tmp/emerg-session.json")
 _OWNERS_PATH = Path("/tmp/emerg-owners.json")
+_KEEP_RESPONSE_HEADERS = {"location", "link", "content-disposition", "server"}
+
+
+def _with_response_headers(headers: dict | None = None) -> dict:
+    """Keep a few response headers. Drop cookies and authorization."""
+    merged = {}
+    raw = getattr(lab_exchange, "last_headers", None)
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            if str(key).lower() in _KEEP_RESPONSE_HEADERS and isinstance(value, str) and value:
+                merged[str(key)] = value
+    if headers:
+        merged.update(headers)
+    return merged
 
 
 def _load_json(path: Path) -> dict:
@@ -599,7 +618,12 @@ def _password_change(summary: dict, sessions: dict, origin: str) -> dict | None:
         return None
     headers = {"X-Emerg-Actor": actor, "X-Emerg-Write": "1"}
     if _response_message(raw):
-        return {"url": origin + path, "status": status, "headers": headers, "body": scrub_lab_body(raw)}
+        return {
+            "url": origin + path,
+            "status": status,
+            "headers": _with_response_headers(headers),
+            "body": scrub_lab_body(raw),
+        }
     login = str(summary.get("login") or "")
     if not login:
         return None
@@ -618,7 +642,7 @@ def _password_change(summary: dict, sessions: dict, origin: str) -> dict | None:
     return {
         "url": origin + login,
         "status": old_status,
-        "headers": headers,
+        "headers": _with_response_headers(headers),
         "body": scrub_lab_body(old_raw),
     }
 
@@ -668,7 +692,12 @@ def _assigned_admin(summary: dict, origin: str) -> dict | None:
     match = re.search(r'"admin"\s*:\s*true', raw)
     if not match or match.group(0) not in raw:
         return None
-    return {"url": origin + account, "status": status, "headers": {}, "body": match.group(0)}
+    return {
+        "url": origin + account,
+        "status": status,
+        "headers": _with_response_headers(),
+        "body": match.group(0),
+    }
 
 
 def _email_change(summary: dict, sessions: dict, origin: str) -> dict | None:
@@ -720,7 +749,9 @@ def _email_change(summary: dict, sessions: dict, origin: str) -> dict | None:
         return {
             "url": origin + profile,
             "status": read_status,
-            "headers": {"X-Emerg-Actor": actor, "X-Emerg-Mail": "1", "X-Emerg-Target": path},
+            "headers": _with_response_headers(
+                {"X-Emerg-Actor": actor, "X-Emerg-Mail": "1", "X-Emerg-Target": path}
+            ),
             "body": scrub_lab_body(raw),
         }
     return None
@@ -802,7 +833,7 @@ def _account_delete(summary: dict, sessions: dict, origin: str, admins: set[str]
     return {
         "url": origin + path,
         "status": status,
-        "headers": {"X-Emerg-Delete": "1"},
+        "headers": _with_response_headers({"X-Emerg-Delete": "1"}),
         "body": body,
     }
 
@@ -872,21 +903,24 @@ def session_follow(
     origin, _, _ = lab_target()
     extra = []
     if login and pairs:
+        known_headers = {}
         try:
             known_status, known_raw = lab_exchange(
                 "POST", login, {"username": pairs[0][0], "password": "incorrect"}
             )
+            known_headers = _with_response_headers()
             unknown_status, unknown_raw = lab_exchange(
                 "POST", login, {"username": "absent-user", "password": "incorrect"}
             )
         except (OSError, ValueError, http.client.HTTPException):
             known_status, known_raw, unknown_status, unknown_raw = 0, "", 0, ""
+            known_headers = {}
         if known_status and known_status == unknown_status and known_raw != unknown_raw and "incorrect" not in known_raw.casefold():
             extra.append(
                 {
                     "url": origin + login,
                     "status": known_status,
-                    "headers": {"X-Emerg-Enum": "1"},
+                    "headers": {**known_headers, "X-Emerg-Enum": "1"},
                     "body": scrub_lab_body(known_raw),
                 }
             )
@@ -949,7 +983,7 @@ def session_follow(
                 {
                     "url": origin + path,
                     "status": status,
-                    "headers": {"X-Emerg-Actor": actor},
+                    "headers": _with_response_headers({"X-Emerg-Actor": actor}),
                     "body": scrub_lab_body(raw),
                 }
             )
@@ -980,7 +1014,7 @@ def session_follow(
             {
                 "url": origin + path,
                 "status": status,
-                "headers": {"X-Emerg-Actor": actor},
+                "headers": _with_response_headers({"X-Emerg-Actor": actor}),
                 "body": scrub_lab_body(raw),
             }
         )
@@ -1006,7 +1040,7 @@ def session_follow(
                 {
                     "url": origin + path,
                     "status": status,
-                    "headers": {"X-Emerg-Actor": actor},
+                    "headers": _with_response_headers({"X-Emerg-Actor": actor}),
                     "body": scrub_lab_body(raw),
                 }
             )
@@ -1037,7 +1071,7 @@ def session_follow(
             {
                 "url": origin + path,
                 "status": status,
-                "headers": {"X-Emerg-Actor": actor},
+                "headers": _with_response_headers({"X-Emerg-Actor": actor}),
                 "body": scrub_lab_body(raw),
             }
         )
@@ -1070,7 +1104,7 @@ def direct_form_check() -> dict:
         {
             "url": origin + "/api/Users",
             "status": status,
-            "headers": {},
+            "headers": _with_response_headers(),
             "body": scrub_lab_body(raw),
         }
     )
@@ -1092,7 +1126,7 @@ def direct_form_check() -> dict:
         {
             "url": origin + "/rest/captcha/",
             "status": status,
-            "headers": {},
+            "headers": _with_response_headers(),
             "body": stored,
         }
     )
@@ -1106,7 +1140,7 @@ def direct_form_check() -> dict:
             {
                 "url": origin + "/api/Feedbacks",
                 "status": status,
-                "headers": {},
+                "headers": _with_response_headers(),
                 "body": scrub_lab_body(raw.replace(answer, "[redacted]")),
             }
         )
